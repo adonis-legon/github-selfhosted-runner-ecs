@@ -1,0 +1,497 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  GitHub Self-Hosted Runners on AWS ECS with Fargate.
+  Deploys ephemeral runner infrastructure including networking, ECS cluster,
+  task definitions, Lambda webhook handler, and supporting resources.
+
+Parameters:
+  CpuAllocation:
+    Type: String
+    Default: "2048"
+    AllowedValues:
+      - "256"
+      - "512"
+      - "1024"
+      - "2048"
+      - "4096"
+    Description: Fargate CPU units for runner tasks
+
+  MemoryAllocation:
+    Type: String
+    Default: "4096"
+    Description: Fargate memory (MiB) for runner tasks
+
+  EphemeralStorage:
+    Type: Number
+    Default: 30
+    MinValue: 21
+    Description: Ephemeral storage (GiB) for runner tasks (minimum 21)
+
+  GitHubOrg:
+    Type: String
+    Description: GitHub organization name for runner registration
+
+  PATValue:
+    Type: String
+    NoEcho: true
+    Description: GitHub Personal Access Token for runner registration
+
+  WebhookSecret:
+    Type: String
+    NoEcho: true
+    Description: GitHub webhook shared secret for signature validation
+
+Resources:
+  # ============================================================
+  # Networking Resources
+  # ============================================================
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-vpc"
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-igw"
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-public-subnet-a"
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-public-subnet-b"
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-public-rt"
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+  RunnerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for GitHub runner ECS tasks - egress only
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-runner-sg"
+
+  # ============================================================
+  # IAM Roles
+  # ============================================================
+
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-task-execution-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: CloudWatchLogsPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ecs/github-runner*"
+        - PolicyName: SSMGetParameterPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/github-runner/*"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-task-execution-role"
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-task-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SSMGetParameterPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/github-runner/pat"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-task-role"
+
+  # ============================================================
+  # ECS Cluster and Task Definitions
+  # ============================================================
+
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "${AWS::StackName}-cluster"
+      CapacityProviders:
+        - FARGATE
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE
+          Weight: 1
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-cluster"
+
+  RunnerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/github-runner
+      RetentionInDays: 7
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-runner-logs"
+
+  TaskDefinitionX86:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: github-runner-x86-64
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu: !Ref CpuAllocation
+      Memory: !Ref MemoryAllocation
+      EphemeralStorage:
+        SizeInGiB: !Ref EphemeralStorage
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: runner
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}:latest"
+          Essential: true
+          Environment:
+            - Name: GITHUB_ORG
+              Value: !Ref GitHubOrg
+            - Name: RUNNER_LABELS
+              Value: "self-hosted,linux,x64"
+            - Name: PAT_SSM_PARAM
+              Value: "/github-runner/pat"
+            - Name: AWS_REGION
+              Value: !Ref "AWS::Region"
+          Secrets:
+            - Name: GITHUB_PAT
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/github-runner/pat"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref RunnerLogGroup
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: runner-x86
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-task-def-x86-64"
+
+  TaskDefinitionArm64:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: github-runner-arm64
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu: !Ref CpuAllocation
+      Memory: !Ref MemoryAllocation
+      EphemeralStorage:
+        SizeInGiB: !Ref EphemeralStorage
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: runner
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}:latest"
+          Essential: true
+          Environment:
+            - Name: GITHUB_ORG
+              Value: !Ref GitHubOrg
+            - Name: RUNNER_LABELS
+              Value: "self-hosted,linux,arm64"
+            - Name: PAT_SSM_PARAM
+              Value: "/github-runner/pat"
+            - Name: AWS_REGION
+              Value: !Ref "AWS::Region"
+          Secrets:
+            - Name: GITHUB_PAT
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/github-runner/pat"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref RunnerLogGroup
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: runner-arm64
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-task-def-arm64"
+
+  # ============================================================
+  # Supporting Resources
+  # ============================================================
+
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: github-runner
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      ImageTagMutability: MUTABLE
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep only the last 5 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 5
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-ecr-repo"
+
+  PATParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Name: /github-runner/pat
+      Value: !Ref PATValue
+      Description: GitHub PAT for runner registration
+      Tags:
+        Name: !Sub "${AWS::StackName}-pat-param"
+
+  WebhookSecretParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Name: /github-runner/webhook-secret
+      Value: !Ref WebhookSecret
+      Description: GitHub webhook shared secret
+      Tags:
+        Name: !Sub "${AWS::StackName}-webhook-secret-param"
+
+  # ============================================================
+  # Lambda and API Gateway Resources
+  # ============================================================
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-lambda-execution-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CloudWatchLogsPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-webhook-handler*"
+        - PolicyName: ECSRunTaskPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:RunTask
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/github-runner-x86-64:*"
+                  - !Sub "arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/github-runner-arm64:*"
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - !GetAtt TaskExecutionRole.Arn
+                  - !GetAtt TaskRole.Arn
+        - PolicyName: SSMGetParameterPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/github-runner/webhook-secret"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-lambda-execution-role"
+
+  WebhookHandlerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-webhook-handler"
+      Runtime: python3.12
+      Handler: webhook_handler.handler
+      Code: ../lambda/
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 128
+      Environment:
+        Variables:
+          CLUSTER_ARN: !GetAtt ECSCluster.Arn
+          TASK_DEF_X86_ARN: !Ref TaskDefinitionX86
+          TASK_DEF_ARM64_ARN: !Ref TaskDefinitionArm64
+          SUBNETS: !Sub "${PublicSubnetA},${PublicSubnetB}"
+          SECURITY_GROUP: !Ref RunnerSecurityGroup
+          WEBHOOK_SECRET_PARAM: /github-runner/webhook-secret
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-webhook-handler"
+
+  WebhookHandlerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-webhook-handler"
+      RetentionInDays: 7
+
+  WebhookApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "${AWS::StackName}-webhook-api"
+      ProtocolType: HTTP
+      Description: HTTP API for GitHub webhook events
+      Tags:
+        Name: !Sub "${AWS::StackName}-webhook-api"
+
+  WebhookApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebhookApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt WebhookHandlerFunction.Arn
+      PayloadFormatVersion: "2.0"
+
+  WebhookApiRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebhookApi
+      RouteKey: "POST /webhook"
+      Target: !Sub "integrations/${WebhookApiIntegration}"
+
+  WebhookApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref WebhookApi
+      StageName: "$default"
+      AutoDeploy: true
+
+  LambdaApiGatewayPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref WebhookHandlerFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${WebhookApi}/*/*/webhook"
+
+Outputs:
+  WebhookEndpointUrl:
+    Description: API Gateway endpoint URL for GitHub webhook
+    Value: !Sub "https://${WebhookApi}.execute-api.${AWS::Region}.amazonaws.com/webhook"
+    Export:
+      Name: !Sub "${AWS::StackName}-webhook-url"
+
+  ECSClusterArn:
+    Description: ARN of the ECS cluster
+    Value: !GetAtt ECSCluster.Arn
+
+  ECRRepositoryUri:
+    Description: URI of the ECR repository
+    Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}"
