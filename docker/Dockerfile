@@ -6,6 +6,9 @@
 #
 # Requirements: 2.5, 5.1, 5.2, 5.3, 5.5
 
+# Stage 1: Get Kaniko executor from the official image
+FROM gcr.io/kaniko-project/executor:v1.23.2 AS kaniko
+
 FROM ubuntu:22.04
 
 # Prevent interactive prompts during package installation
@@ -47,6 +50,23 @@ RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
     docker-ce-cli \
     docker-buildx-plugin \
     && rm -rf /var/lib/apt/lists/*
+
+# -----------------------------------------------------------
+# Install Kaniko for unprivileged image builds on Fargate
+# Copied from the official Kaniko image (multi-stage build)
+# Kaniko builds container images from Dockerfiles without a Docker
+# daemon or privileged mode.
+# -----------------------------------------------------------
+COPY --from=kaniko /kaniko/executor /kaniko/executor
+COPY --from=kaniko /kaniko/docker-credential-gcr /kaniko/docker-credential-gcr
+COPY --from=kaniko /kaniko/docker-credential-ecr-login /kaniko/docker-credential-ecr-login
+RUN ln -s /kaniko/executor /usr/local/bin/executor \
+    && ln -s /kaniko/executor /usr/local/bin/kaniko \
+    && ln -s /kaniko/docker-credential-ecr-login /usr/local/bin/docker-credential-ecr-login
+
+# Configure Kaniko for ECR credential helper
+RUN mkdir -p /kaniko/.docker \
+    && echo '{"credsStore":"ecr-login"}' > /kaniko/.docker/config.json
 
 # -----------------------------------------------------------
 # Install AWS CLI for SSM Parameter Store access (needed by entrypoint)

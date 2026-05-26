@@ -238,7 +238,9 @@ The system routes jobs based on architecture labels in `runs-on`:
 
 ### Docker Builds Inside Runners
 
-The runner image includes Docker CLI and buildx. For container builds within your workflow:
+The runner image includes [Kaniko](https://github.com/chainguard-dev/kaniko) (Chainguard fork) for building container images without a Docker daemon — which is required on Fargate since it doesn't support privileged mode.
+
+**Build and push to ECR:**
 
 ```yaml
 jobs:
@@ -246,9 +248,29 @@ jobs:
     runs-on: [self-hosted, linux, x64]
     steps:
       - uses: actions/checkout@v4
-      - name: Build image
-        run: docker buildx build -t my-app:latest .
+      - name: Build and push image with Kaniko
+        run: |
+          /kaniko/executor \
+            --context ${{ github.workspace }} \
+            --dockerfile Dockerfile \
+            --destination ${{ secrets.ECR_REPO_URI }}:${{ github.sha }} \
+            --destination ${{ secrets.ECR_REPO_URI }}:latest
 ```
+
+**Build without pushing (validation only):**
+
+```yaml
+- name: Build image (no push)
+  run: |
+    /kaniko/executor \
+      --context ${{ github.workspace }} \
+      --dockerfile Dockerfile \
+      --no-push
+```
+
+Kaniko authenticates to ECR automatically via the ECR credential helper (pre-configured in the image). The task role already has ECR push permissions.
+
+> **Note:** `docker build` and `docker run` commands will NOT work on these runners since there's no Docker daemon. Use Kaniko for image builds.
 
 ### Repo-Level Runners (Personal Accounts)
 
@@ -336,6 +358,64 @@ Each runner task follows the state machine shown in the architecture diagram abo
 7. **Terminate** — Deregisters from GitHub and the Fargate task stops
 
 If no job arrives within 5 minutes, the runner deregisters and exits cleanly.
+
+## Testing with the Demo Repository
+
+A demo repository is available at [alegon-apps/demo-nginx-cicd](https://github.com/alegon-apps/demo-nginx-cicd) to verify the runner infrastructure end-to-end.
+
+### What it does
+
+The demo repo contains a minimal nginx Dockerfile and a GitHub Actions workflow that builds the image on both architectures (`x64` and `arm64`) using the self-hosted ECS runners.
+
+### Steps to test
+
+1. **Ensure the stack is deployed** and the webhook is configured (see [Quick Start](#quick-start)).
+
+2. **Fork or push to the demo repo:**
+
+   ```bash
+   git clone https://github.com/alegon-apps/demo-nginx-cicd.git
+   cd demo-nginx-cicd
+   # Make any change (e.g., edit html/index.html)
+   git commit -am "trigger build" && git push
+   ```
+
+3. **Observe the workflow** at https://github.com/alegon-apps/demo-nginx-cicd/actions — you should see two jobs (`build-x86` and `build-arm`) picked up by ECS runners.
+
+4. **Verify in AWS:**
+   - ECS console → cluster → check that tasks were launched and completed
+   - CloudWatch Logs → `/ecs/github-runner` → confirm runner registered, executed, and deregistered
+
+### Expected workflow file
+
+The demo uses this workflow (`.github/workflows/build.yml`):
+
+```yaml
+name: Build Nginx Image
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-x86:
+    runs-on: [self-hosted, linux, x64]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker buildx build -t demo-nginx:latest .
+
+  build-arm:
+    runs-on: [self-hosted, linux, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker buildx build -t demo-nginx:latest .
+```
+
+If both jobs complete successfully, the self-hosted runner infrastructure is working correctly.
 
 ## Development
 
