@@ -60,13 +60,15 @@ RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
 COPY --from=kaniko /kaniko/executor /kaniko/executor
 COPY --from=kaniko /kaniko/docker-credential-gcr /kaniko/docker-credential-gcr
 COPY --from=kaniko /kaniko/docker-credential-ecr-login /kaniko/docker-credential-ecr-login
-RUN ln -s /kaniko/executor /usr/local/bin/executor \
+RUN chmod -R 777 /kaniko \
+    && ln -s /kaniko/executor /usr/local/bin/executor \
     && ln -s /kaniko/executor /usr/local/bin/kaniko \
     && ln -s /kaniko/docker-credential-ecr-login /usr/local/bin/docker-credential-ecr-login
 
 # Configure Kaniko for ECR credential helper
 RUN mkdir -p /kaniko/.docker \
-    && echo '{"credsStore":"ecr-login"}' > /kaniko/.docker/config.json
+    && echo '{"credsStore":"ecr-login"}' > /kaniko/.docker/config.json \
+    && chmod -R 777 /kaniko/.docker
 
 # -----------------------------------------------------------
 # Install AWS CLI for SSM Parameter Store access (needed by entrypoint)

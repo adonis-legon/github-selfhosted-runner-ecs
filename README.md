@@ -240,6 +240,8 @@ The system routes jobs based on architecture labels in `runs-on`:
 
 The runner image includes [Kaniko](https://github.com/chainguard-dev/kaniko) (Chainguard fork) for building container images without a Docker daemon — which is required on Fargate since it doesn't support privileged mode.
 
+> **Important:** Kaniko must run with `sudo` because it needs root to unpack base image layers. The `--force` flag is required since Kaniko runs inside the runner image rather than as its own container.
+
 **Build and push to ECR:**
 
 ```yaml
@@ -250,11 +252,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build and push image with Kaniko
         run: |
-          /kaniko/executor \
+          sudo /kaniko/executor \
             --context ${{ github.workspace }} \
             --dockerfile Dockerfile \
             --destination ${{ secrets.ECR_REPO_URI }}:${{ github.sha }} \
-            --destination ${{ secrets.ECR_REPO_URI }}:latest
+            --destination ${{ secrets.ECR_REPO_URI }}:latest \
+            --force
 ```
 
 **Build without pushing (validation only):**
@@ -262,10 +265,11 @@ jobs:
 ```yaml
 - name: Build image (no push)
   run: |
-    /kaniko/executor \
+    sudo /kaniko/executor \
       --context ${{ github.workspace }} \
       --dockerfile Dockerfile \
-      --no-push
+      --no-push \
+      --force
 ```
 
 Kaniko authenticates to ECR automatically via the ECR credential helper (pre-configured in the image). The task role already has ECR push permissions.
@@ -404,15 +408,25 @@ jobs:
     runs-on: [self-hosted, linux, x64]
     steps:
       - uses: actions/checkout@v4
-      - name: Build Docker image
-        run: docker buildx build -t demo-nginx:latest .
+      - name: Build image with Kaniko
+        run: |
+          sudo /kaniko/executor \
+            --context ${{ github.workspace }} \
+            --dockerfile Dockerfile \
+            --no-push \
+            --force
 
   build-arm:
     runs-on: [self-hosted, linux, arm64]
     steps:
       - uses: actions/checkout@v4
-      - name: Build Docker image
-        run: docker buildx build -t demo-nginx:latest .
+      - name: Build image with Kaniko
+        run: |
+          sudo /kaniko/executor \
+            --context ${{ github.workspace }} \
+            --dockerfile Dockerfile \
+            --no-push \
+            --force
 ```
 
 If both jobs complete successfully, the self-hosted runner infrastructure is working correctly.
