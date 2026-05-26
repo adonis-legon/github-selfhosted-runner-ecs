@@ -4,56 +4,9 @@ Ephemeral GitHub Actions self-hosted runners running on AWS ECS with Fargate. Th
 
 ## Architecture
 
-```mermaid
-graph TB
-    subgraph GitHub
-        GH[GitHub Repository]
-        WH[Webhook Event]
-    end
+![Architecture Diagram](docs/architecture.drawio.png)
 
-    subgraph AWS
-        subgraph "API Gateway + Lambda"
-            APIGW[API Gateway HTTPS Endpoint]
-            LFN[Lambda - webhook_handler.py]
-        end
-
-        subgraph "ECS Cluster - Fargate"
-            TD_X86[Task Definition x86_64]
-            TD_ARM[Task Definition arm64]
-            TASK[Runner Task - Ephemeral]
-        end
-
-        subgraph Networking
-            VPC[VPC]
-            SUB_A[Public Subnet AZ-a]
-            SUB_B[Public Subnet AZ-b]
-            IGW[Internet Gateway]
-            SG[Security Group - Egress Only]
-        end
-
-        subgraph "Storage & Secrets"
-            ECR[ECR Repository]
-            SSM_PAT[SSM Parameter - PAT]
-            SSM_WH[SSM Parameter - Webhook Secret]
-        end
-    end
-
-    GH -->|workflow_job queued| WH
-    WH -->|POST /webhook| APIGW
-    APIGW --> LFN
-    LFN -->|Validate signature| SSM_WH
-    LFN -->|ecs:RunTask| TD_X86
-    LFN -->|ecs:RunTask| TD_ARM
-    TD_X86 --> TASK
-    TD_ARM --> TASK
-    TASK -->|Pull image| ECR
-    TASK -->|Get PAT| SSM_PAT
-    TASK -->|Register + Run job| GH
-    TASK --> SUB_A
-    TASK --> SUB_B
-    SUB_A --> IGW
-    SUB_B --> IGW
-```
+> The source diagram is at `docs/architecture.drawio` — open it in [draw.io](https://app.diagrams.net/) or VS Code with the Draw.io Integration extension to edit.
 
 ### Request Flow
 
@@ -98,19 +51,28 @@ stateDiagram-v2
 ├── cloudformation/
 │   └── template.yaml          # All AWS infrastructure (single stack)
 ├── docker/
-│   ├── Dockerfile             # Multi-arch runner image (Ubuntu 22.04)
-│   └── entrypoint.sh          # Runner lifecycle: register → run → deregister
+│   ├── Dockerfile             # Multi-arch runner image (Ubuntu 22.04 + Kaniko)
+│   ├── entrypoint.sh          # Runner lifecycle: register → run → deregister
+│   └── retry.py               # Retry logic module (used by property tests)
+├── docs/
+│   └── architecture.drawio    # AWS architecture diagram
 ├── lambda/
 │   └── webhook_handler.py     # Webhook processing Lambda function
 ├── scripts/
 │   ├── build-image.sh         # Build and push multi-arch Docker image
 │   ├── create-stack.sh        # Deploy CloudFormation stack
-│   └── destroy-stack.sh       # Tear down stack with confirmation
-└── tests/
-    ├── unit/                  # Example-based unit tests
-    ├── property/              # Property-based tests (Hypothesis)
-    ├── smoke/                 # CloudFormation template validation
-    └── integration/           # End-to-end webhook flow tests
+│   ├── destroy-stack.sh       # Tear down stack with confirmation
+│   └── validate_yaml.py       # CloudFormation template validator (dev utility)
+├── tests/
+│   ├── unit/                  # Example-based unit tests
+│   ├── property/              # Property-based tests (Hypothesis)
+│   ├── smoke/                 # CloudFormation template validation
+│   └── integration/           # End-to-end webhook flow tests
+├── CHANGELOG.md
+├── LICENSE
+├── README.md
+├── requirements.txt           # Lambda runtime dependencies
+└── requirements-dev.txt       # Test dependencies
 ```
 
 ## Quick Start
@@ -468,4 +430,4 @@ python -m pytest tests/property/ -v --hypothesis-show-statistics
 
 ## License
 
-MIT
+[MIT](LICENSE)
