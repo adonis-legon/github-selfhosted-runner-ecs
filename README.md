@@ -103,8 +103,7 @@ stateDiagram-v2
 ├── lambda/
 │   └── webhook_handler.py     # Webhook processing Lambda function
 ├── scripts/
-│   ├── build-image.sh         # Build multi-arch Docker image
-│   ├── push-image.sh          # Push image to ECR
+│   ├── build-image.sh         # Build and push multi-arch Docker image
 │   ├── create-stack.sh        # Deploy CloudFormation stack
 │   └── destroy-stack.sh       # Tear down stack with confirmation
 └── tests/
@@ -118,10 +117,12 @@ stateDiagram-v2
 
 ### 1. Create a GitHub PAT
 
-Generate a Personal Access Token at [github.com/settings/tokens](https://github.com/settings/tokens):
+Generate a Personal Access Token (classic) at [github.com/settings/tokens](https://github.com/settings/tokens):
 
-- **Classic token**: Select `admin:org` scope (for org-level runners) or `repo` scope (for repo-level runners)
-- **Fine-grained token**: Grant "Self-hosted runners" read/write permission on the target org or repo
+- **Org-level runners**: Select the `admin:org` scope
+- **Repo-level runners**: Select the `repo` scope
+
+> **Note:** Fine-grained PATs have limited support for self-hosted runner registration. The classic token is the straightforward option. For production, consider a [GitHub App](https://docs.github.com/en/actions/tutorials/use-actions-runner-controller/authenticate-to-the-api) which provides short-lived tokens and granular permissions.
 
 ### 2. Generate a Webhook Secret
 
@@ -132,6 +133,20 @@ openssl rand -hex 20
 Save this value — you'll use it for both the stack deployment and the GitHub webhook configuration.
 
 ### 3. Deploy the Infrastructure
+
+**For a personal account (repo-level runners):**
+
+```bash
+./scripts/create-stack.sh \
+  --stack-name github-runners \
+  --region us-east-1 \
+  --pat ghp_YOUR_PAT_HERE \
+  --webhook-secret YOUR_SECRET_HERE \
+  --github-org your-username \
+  --github-repo your-repo-name
+```
+
+**For an organization (org-level runners):**
 
 ```bash
 ./scripts/create-stack.sh \
@@ -144,25 +159,30 @@ Save this value — you'll use it for both the stack deployment and the GitHub w
 
 Optional parameters:
 
-| Flag        | Default | Description                                    |
-| ----------- | ------- | ---------------------------------------------- |
-| `--cpu`     | 2048    | Fargate CPU units (256, 512, 1024, 2048, 4096) |
-| `--memory`  | 4096    | Memory in MiB                                  |
-| `--storage` | 30      | Ephemeral storage in GiB (min 21)              |
+| Flag            | Default | Description                                          |
+| --------------- | ------- | ---------------------------------------------------- |
+| `--github-repo` | (empty) | Repo name for repo-level runners; omit for org-level |
+| `--cpu`         | 2048    | Fargate CPU units (256, 512, 1024, 2048, 4096)       |
+| `--memory`      | 4096    | Memory in MiB                                        |
+| `--storage`     | 30      | Ephemeral storage in GiB (min 21)                    |
 
 The script validates the template, packages the Lambda code, deploys the stack, and waits for completion. On success it prints the **Webhook Endpoint URL** — you'll need this next.
 
 ### 4. Build and Push the Runner Image
 
 ```bash
-# Build for both amd64 and arm64
-./scripts/build-image.sh v1.0.0
-
-# Push to ECR (get the URI from stack outputs)
-./scripts/push-image.sh \
+# Build multi-arch (amd64 + arm64) and push directly to ECR
+./scripts/build-image.sh v1.0.0 \
   123456789012.dkr.ecr.us-east-1.amazonaws.com/github-runner \
-  us-east-1 \
-  v1.0.0
+  us-east-1
+```
+
+The script authenticates with ECR, builds for both platforms, and pushes the image in one step. The ECR repo URI is in the stack outputs.
+
+To build locally without pushing (for testing):
+
+```bash
+./scripts/build-image.sh v1.0.0
 ```
 
 ### 5. Configure the GitHub Webhook
@@ -230,48 +250,46 @@ jobs:
         run: docker buildx build -t my-app:latest .
 ```
 
-### Repo-Level Runners (Optional)
+### Repo-Level Runners (Personal Accounts)
 
-By default, runners register at the organization level. To scope runners to a specific repository, set the `GITHUB_REPO` environment variable in the task definition (requires modifying the CloudFormation template).
+By default, if `--github-repo` is provided during deployment, runners register at the repository level using the endpoint `/repos/{owner}/{repo}/actions/runners/registration-token`. This is the correct setup for personal GitHub accounts that don't have an organization.
+
+If `--github-repo` is omitted, runners register at the organization level.
 
 ## Configuration Reference
 
 ### CloudFormation Parameters
 
-| Parameter          | Required | Default | Description                         |
-| ------------------ | -------- | ------- | ----------------------------------- |
-| `GitHubOrg`        | Yes      | —       | GitHub organization name            |
-| `PATValue`         | Yes      | —       | GitHub PAT (stored in SSM)          |
-| `WebhookSecret`    | Yes      | —       | Webhook HMAC secret (stored in SSM) |
-| `CpuAllocation`    | No       | 2048    | Fargate CPU units                   |
-| `MemoryAllocation` | No       | 4096    | Memory in MiB                       |
-| `EphemeralStorage` | No       | 30      | Ephemeral disk in GiB (min 21)      |
+| Parameter          | Required | Default | Description                                                       |
+| ------------------ | -------- | ------- | ----------------------------------------------------------------- |
+| `GitHubOrg`        | Yes      | —       | GitHub organization or username                                   |
+| `GitHubRepo`       | No       | (empty) | Repository name for repo-level runners; leave empty for org-level |
+| `PATValue`         | Yes      | —       | GitHub PAT (stored in SSM)                                        |
+| `WebhookSecret`    | Yes      | —       | Webhook HMAC secret (stored in SSM)                               |
+| `CpuAllocation`    | No       | 2048    | Fargate CPU units                                                 |
+| `MemoryAllocation` | No       | 4096    | Memory in MiB                                                     |
+| `EphemeralStorage` | No       | 30      | Ephemeral disk in GiB (min 21)                                    |
 
 ### Runner Environment Variables
 
 These are set automatically by the task definition:
 
-| Variable        | Description                          |
-| --------------- | ------------------------------------ |
-| `GITHUB_ORG`    | Organization for runner registration |
-| `GITHUB_REPO`   | (Optional) Specific repository       |
-| `PAT_SSM_PARAM` | SSM parameter path for the PAT       |
-| `RUNNER_LABELS` | Labels assigned to the runner        |
-| `AWS_REGION`    | Region for AWS API calls             |
+| Variable        | Description                                            |
+| --------------- | ------------------------------------------------------ |
+| `GITHUB_ORG`    | Organization or username for runner registration       |
+| `GITHUB_REPO`   | (Optional) Repository name for repo-level registration |
+| `PAT_SSM_PARAM` | SSM parameter path for the PAT                         |
+| `RUNNER_LABELS` | Labels assigned to the runner                          |
+| `AWS_REGION`    | Region for AWS API calls                               |
 
 ## Operations
 
 ### Updating the Runner Image
 
 ```bash
-# Rebuild with a new version tag
-./scripts/build-image.sh v1.1.0
-
-# Push the updated image
-./scripts/push-image.sh \
+./scripts/build-image.sh v1.1.0 \
   123456789012.dkr.ecr.us-east-1.amazonaws.com/github-runner \
-  us-east-1 \
-  v1.1.0
+  us-east-1
 ```
 
 New tasks will automatically pull the `latest` tag. Running tasks are unaffected (ephemeral — they terminate after one job).

@@ -7,23 +7,28 @@ TEMPLATE_FILE="${SCRIPT_DIR}/../cloudformation/template.yaml"
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") --stack-name <name> --region <region> --pat <pat-value> --webhook-secret <secret> [options]
+Usage: $(basename "$0") --stack-name <name> --region <region> --pat <pat-value> --webhook-secret <secret> --github-org <org-or-username> [options]
 
 Required parameters:
   --stack-name       Name of the CloudFormation stack
   --region           AWS region to deploy the stack in
   --pat              GitHub Personal Access Token value
   --webhook-secret   GitHub webhook shared secret
+  --github-org       GitHub organization or username
 
 Optional parameters:
-  --github-org       GitHub organization name (default: extracted from PAT scope)
+  --github-repo      GitHub repository name (for repo-level runners; omit for org-level)
   --cpu              Fargate CPU units (default: 2048)
   --memory           Fargate memory in MiB (default: 4096)
   --storage          Ephemeral storage in GiB (default: 30, min: 21)
   --help             Show this help message
 
-Example:
-  $(basename "$0") --stack-name my-runners --region us-east-1 --pat ghp_xxxx --webhook-secret mysecret
+Examples:
+  # Org-level runners
+  $(basename "$0") --stack-name my-runners --region us-east-1 --pat ghp_xxxx --webhook-secret mysecret --github-org my-org
+
+  # Repo-level runners (personal account)
+  $(basename "$0") --stack-name my-runners --region us-east-1 --pat ghp_xxxx --webhook-secret mysecret --github-org my-username --github-repo my-repo
 EOF
     exit 1
 }
@@ -34,6 +39,7 @@ REGION=""
 PAT_VALUE=""
 WEBHOOK_SECRET=""
 GITHUB_ORG=""
+GITHUB_REPO=""
 CPU="2048"
 MEMORY="4096"
 STORAGE="30"
@@ -58,6 +64,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --github-org)
             GITHUB_ORG="$2"
+            shift 2
+            ;;
+        --github-repo)
+            GITHUB_REPO="$2"
             shift 2
             ;;
         --cpu)
@@ -95,6 +105,9 @@ if [[ -z "$PAT_VALUE" ]]; then
 fi
 if [[ -z "$WEBHOOK_SECRET" ]]; then
     MISSING_PARAMS+=("--webhook-secret")
+fi
+if [[ -z "$GITHUB_ORG" ]]; then
+    MISSING_PARAMS+=("--github-org")
 fi
 
 if [[ ${#MISSING_PARAMS[@]} -gt 0 ]]; then
@@ -158,9 +171,10 @@ echo ""
 # Step 3: Build parameter list
 PARAMS="ParameterKey=PATValue,ParameterValue=${PAT_VALUE}"
 PARAMS="${PARAMS} ParameterKey=WebhookSecret,ParameterValue=${WEBHOOK_SECRET}"
+PARAMS="${PARAMS} ParameterKey=GitHubOrg,ParameterValue=${GITHUB_ORG}"
 
-if [[ -n "$GITHUB_ORG" ]]; then
-    PARAMS="${PARAMS} ParameterKey=GitHubOrg,ParameterValue=${GITHUB_ORG}"
+if [[ -n "$GITHUB_REPO" ]]; then
+    PARAMS="${PARAMS} ParameterKey=GitHubRepo,ParameterValue=${GITHUB_REPO}"
 fi
 if [[ "$CPU" != "2048" ]]; then
     PARAMS="${PARAMS} ParameterKey=CpuAllocation,ParameterValue=${CPU}"

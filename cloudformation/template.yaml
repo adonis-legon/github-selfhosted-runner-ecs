@@ -29,7 +29,12 @@ Parameters:
 
   GitHubOrg:
     Type: String
-    Description: GitHub organization name for runner registration
+    Description: GitHub organization or username for runner registration
+
+  GitHubRepo:
+    Type: String
+    Default: ""
+    Description: (Optional) GitHub repository name for repo-level runner registration. Leave empty for org-level.
 
   PATValue:
     Type: String
@@ -246,6 +251,8 @@ Resources:
           Environment:
             - Name: GITHUB_ORG
               Value: !Ref GitHubOrg
+            - Name: GITHUB_REPO
+              Value: !Ref GitHubRepo
             - Name: RUNNER_LABELS
               Value: "self-hosted,linux,x64"
             - Name: PAT_SSM_PARAM
@@ -288,6 +295,8 @@ Resources:
           Environment:
             - Name: GITHUB_ORG
               Value: !Ref GitHubOrg
+            - Name: GITHUB_REPO
+              Value: !Ref GitHubRepo
             - Name: RUNNER_LABELS
               Value: "self-hosted,linux,arm64"
             - Name: PAT_SSM_PARAM
