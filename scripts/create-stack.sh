@@ -18,6 +18,7 @@ Required parameters:
 
 Optional parameters:
   --github-repo      GitHub repository name (for repo-level runners; omit for org-level)
+  --task-role-arn    ARN of a custom IAM role for runner tasks (grants workflow AWS access)
   --cpu              Fargate CPU units (default: 2048)
   --memory           Fargate memory in MiB (default: 4096)
   --storage          Ephemeral storage in GiB (default: 30, min: 21)
@@ -40,6 +41,7 @@ PAT_VALUE=""
 WEBHOOK_SECRET=""
 GITHUB_ORG=""
 GITHUB_REPO=""
+TASK_ROLE_ARN=""
 CPU="2048"
 MEMORY="4096"
 STORAGE="30"
@@ -68,6 +70,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --github-repo)
             GITHUB_REPO="$2"
+            shift 2
+            ;;
+        --task-role-arn)
+            TASK_ROLE_ARN="$2"
             shift 2
             ;;
         --cpu)
@@ -175,6 +181,9 @@ PARAMS="${PARAMS} ParameterKey=GitHubOrg,ParameterValue=${GITHUB_ORG}"
 
 if [[ -n "$GITHUB_REPO" ]]; then
     PARAMS="${PARAMS} ParameterKey=GitHubRepo,ParameterValue=${GITHUB_REPO}"
+fi
+if [[ -n "$TASK_ROLE_ARN" ]]; then
+    PARAMS="${PARAMS} ParameterKey=TaskRoleArn,ParameterValue=${TASK_ROLE_ARN}"
 fi
 if [[ "$CPU" != "2048" ]]; then
     PARAMS="${PARAMS} ParameterKey=CpuAllocation,ParameterValue=${CPU}"

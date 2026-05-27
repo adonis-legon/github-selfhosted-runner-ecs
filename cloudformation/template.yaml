@@ -46,6 +46,14 @@ Parameters:
     NoEcho: true
     Description: GitHub webhook shared secret for signature validation
 
+  TaskRoleArn:
+    Type: String
+    Default: ""
+    Description: (Optional) ARN of a custom IAM role for runner tasks. If provided, this role is used instead of the default task role. Use this to grant your workflows access to AWS services (ECR, S3, STS, etc.).
+
+Conditions:
+  HasCustomTaskRole: !Not [!Equals [!Ref TaskRoleArn, ""]]
+
 Resources:
   # ============================================================
   # Networking Resources
@@ -243,7 +251,8 @@ Resources:
         CpuArchitecture: X86_64
         OperatingSystemFamily: LINUX
       ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
-      TaskRoleArn: !GetAtt TaskRole.Arn
+      TaskRoleArn:
+        !If [HasCustomTaskRole, !Ref TaskRoleArn, !GetAtt TaskRole.Arn]
       ContainerDefinitions:
         - Name: runner
           Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}:latest"
@@ -287,7 +296,8 @@ Resources:
         CpuArchitecture: ARM64
         OperatingSystemFamily: LINUX
       ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
-      TaskRoleArn: !GetAtt TaskRole.Arn
+      TaskRoleArn:
+        !If [HasCustomTaskRole, !Ref TaskRoleArn, !GetAtt TaskRole.Arn]
       ContainerDefinitions:
         - Name: runner
           Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}:latest"

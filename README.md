@@ -121,12 +121,13 @@ Save this value — you'll use it for both the stack deployment and the GitHub w
 
 Optional parameters:
 
-| Flag            | Default | Description                                          |
-| --------------- | ------- | ---------------------------------------------------- |
-| `--github-repo` | (empty) | Repo name for repo-level runners; omit for org-level |
-| `--cpu`         | 2048    | Fargate CPU units (256, 512, 1024, 2048, 4096)       |
-| `--memory`      | 4096    | Memory in MiB                                        |
-| `--storage`     | 30      | Ephemeral storage in GiB (min 21)                    |
+| Flag              | Default | Description                                           |
+| ----------------- | ------- | ----------------------------------------------------- |
+| `--github-repo`   | (empty) | Repo name for repo-level runners; omit for org-level  |
+| `--task-role-arn` | (empty) | ARN of a custom IAM role for runner tasks (see below) |
+| `--cpu`           | 2048    | Fargate CPU units (256, 512, 1024, 2048, 4096)        |
+| `--memory`        | 4096    | Memory in MiB                                         |
+| `--storage`       | 30      | Ephemeral storage in GiB (min 21)                     |
 
 The script validates the template, packages the Lambda code, deploys the stack, and waits for completion. On success it prints the **Webhook Endpoint URL** — you'll need this next.
 
@@ -244,6 +245,75 @@ By default, if `--github-repo` is provided during deployment, runners register a
 
 If `--github-repo` is omitted, runners register at the organization level.
 
+### Custom Task Role (AWS Permissions for Workflows)
+
+By default, runner tasks only have permission to read the PAT from SSM. If your workflows need to call AWS services (ECR, S3, STS, etc.), create an IAM role with the required permissions and pass it during deployment:
+
+```bash
+./scripts/create-stack.sh \
+  --stack-name github-runners \
+  --region us-east-1 \
+  --pat ghp_xxx \
+  --webhook-secret xxx \
+  --github-org your-org \
+  --task-role-arn arn:aws:iam::123456789012:role/my-runner-task-role
+```
+
+The custom role must have a trust policy allowing `ecs-tasks.amazonaws.com` to assume it:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": { "Service": "ecs-tasks.amazonaws.com" },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+```
+
+Example policy for workflows that build and push Docker images to ECR:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["ecr:GetAuthorizationToken"],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload",
+        "ecr:PutImage"
+      ],
+      "Resource": "arn:aws:ecr:*:123456789012:repository/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["sts:GetCallerIdentity"],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["ssm:GetParameter"],
+      "Resource": "arn:aws:ssm:*:123456789012:parameter/github-runner/pat"
+    }
+  ]
+}
+```
+
+> **Important:** Your custom role must include `ssm:GetParameter` for `/github-runner/pat` — the entrypoint needs this to register the runner.
+
 ## Configuration Reference
 
 ### CloudFormation Parameters
@@ -254,6 +324,7 @@ If `--github-repo` is omitted, runners register at the organization level.
 | `GitHubRepo`       | No       | (empty) | Repository name for repo-level runners; leave empty for org-level |
 | `PATValue`         | Yes      | —       | GitHub PAT (stored in SSM)                                        |
 | `WebhookSecret`    | Yes      | —       | Webhook HMAC secret (stored in SSM)                               |
+| `TaskRoleArn`      | No       | (empty) | Custom IAM role ARN for runner tasks (grants workflow AWS access) |
 | `CpuAllocation`    | No       | 2048    | Fargate CPU units                                                 |
 | `MemoryAllocation` | No       | 4096    | Memory in MiB                                                     |
 | `EphemeralStorage` | No       | 30      | Ephemeral disk in GiB (min 21)                                    |
