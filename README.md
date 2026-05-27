@@ -121,15 +121,27 @@ Save this value — you'll use it for both the stack deployment and the GitHub w
 
 Optional parameters:
 
-| Flag              | Default | Description                                           |
-| ----------------- | ------- | ----------------------------------------------------- |
-| `--github-repo`   | (empty) | Repo name for repo-level runners; omit for org-level  |
-| `--task-role-arn` | (empty) | ARN of a custom IAM role for runner tasks (see below) |
-| `--cpu`           | 2048    | Fargate CPU units (256, 512, 1024, 2048, 4096)        |
-| `--memory`        | 4096    | Memory in MiB                                         |
-| `--storage`       | 30      | Ephemeral storage in GiB (min 21)                     |
+| Flag              | Default | Description                                            |
+| ----------------- | ------- | ------------------------------------------------------ |
+| `--update`        | —       | Update an existing stack instead of creating a new one |
+| `--github-repo`   | (empty) | Repo name for repo-level runners; omit for org-level   |
+| `--task-role-arn` | (empty) | ARN of a custom IAM role for runner tasks (see below)  |
+| `--cpu`           | 2048    | Fargate CPU units (256, 512, 1024, 2048, 4096)         |
+| `--memory`        | 4096    | Memory in MiB                                          |
+| `--storage`       | 30      | Ephemeral storage in GiB (min 21)                      |
 
 The script validates the template, packages the Lambda code, deploys the stack, and waits for completion. On success it prints the **Webhook Endpoint URL** — you'll need this next.
+
+To update an existing stack (e.g., after changing the template or parameters):
+
+```bash
+./scripts/create-stack.sh --update \
+  --stack-name github-runners \
+  --region us-east-1 \
+  --pat ghp_YOUR_PAT_HERE \
+  --webhook-secret YOUR_SECRET_HERE \
+  --github-org your-org-name
+```
 
 ### 4. Build and Push the Runner Image
 

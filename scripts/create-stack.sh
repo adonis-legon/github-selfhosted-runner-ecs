@@ -17,6 +17,7 @@ Required parameters:
   --github-org       GitHub organization or username
 
 Optional parameters:
+  --update           Update an existing stack instead of creating a new one
   --github-repo      GitHub repository name (for repo-level runners; omit for org-level)
   --task-role-arn    ARN of a custom IAM role for runner tasks (grants workflow AWS access)
   --cpu              Fargate CPU units (default: 2048)
@@ -25,11 +26,14 @@ Optional parameters:
   --help             Show this help message
 
 Examples:
-  # Org-level runners
+  # Create org-level runners
   $(basename "$0") --stack-name my-runners --region us-east-1 --pat ghp_xxxx --webhook-secret mysecret --github-org my-org
 
-  # Repo-level runners (personal account)
+  # Create repo-level runners (personal account)
   $(basename "$0") --stack-name my-runners --region us-east-1 --pat ghp_xxxx --webhook-secret mysecret --github-org my-username --github-repo my-repo
+
+  # Update an existing stack
+  $(basename "$0") --update --stack-name my-runners --region us-east-1 --pat ghp_xxxx --webhook-secret mysecret --github-org my-org
 EOF
     exit 1
 }
@@ -42,6 +46,7 @@ WEBHOOK_SECRET=""
 GITHUB_ORG=""
 GITHUB_REPO=""
 TASK_ROLE_ARN=""
+UPDATE_MODE="false"
 CPU="2048"
 MEMORY="4096"
 STORAGE="30"
@@ -75,6 +80,10 @@ while [[ $# -gt 0 ]]; do
         --task-role-arn)
             TASK_ROLE_ARN="$2"
             shift 2
+            ;;
+        --update)
+            UPDATE_MODE="true"
+            shift
             ;;
         --cpu)
             CPU="$2"
@@ -196,16 +205,29 @@ if [[ "$STORAGE" != "30" ]]; then
 fi
 
 # Step 4: Deploy the stack
-echo "Deploying CloudFormation stack '${STACK_NAME}'..."
-aws cloudformation create-stack \
-    --stack-name "$STACK_NAME" \
-    --template-body "file://${PACKAGED_TEMPLATE}" \
-    --parameters $PARAMS \
-    --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-    --region "$REGION" > /dev/null
+if [[ "$UPDATE_MODE" == "true" ]]; then
+    echo "Updating CloudFormation stack '${STACK_NAME}'..."
+    aws cloudformation update-stack \
+        --stack-name "$STACK_NAME" \
+        --template-body "file://${PACKAGED_TEMPLATE}" \
+        --parameters $PARAMS \
+        --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+        --region "$REGION" > /dev/null
 
-echo "Stack creation initiated. Waiting for completion..."
-echo ""
+    echo "Stack update initiated. Waiting for completion..."
+    echo ""
+else
+    echo "Creating CloudFormation stack '${STACK_NAME}'..."
+    aws cloudformation create-stack \
+        --stack-name "$STACK_NAME" \
+        --template-body "file://${PACKAGED_TEMPLATE}" \
+        --parameters $PARAMS \
+        --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+        --region "$REGION" > /dev/null
+
+    echo "Stack creation initiated. Waiting for completion..."
+    echo ""
+fi
 
 # Step 5: Wait for stack to reach terminal state
 while true; do
@@ -216,19 +238,19 @@ while true; do
         --output text 2>/dev/null || echo "DESCRIBE_FAILED")
 
     case "$STACK_STATUS" in
-        CREATE_COMPLETE)
-            echo "Stack creation completed successfully!"
+        CREATE_COMPLETE|UPDATE_COMPLETE)
+            echo "Stack operation completed successfully!"
             echo ""
             break
             ;;
-        CREATE_FAILED|ROLLBACK_COMPLETE|ROLLBACK_FAILED)
-            echo "Stack creation failed with status: $STACK_STATUS"
+        CREATE_FAILED|ROLLBACK_COMPLETE|ROLLBACK_FAILED|UPDATE_ROLLBACK_COMPLETE|UPDATE_ROLLBACK_FAILED)
+            echo "Stack operation failed with status: $STACK_STATUS"
             echo ""
             echo "=== Stack Events (failure details) ==="
             aws cloudformation describe-stack-events \
                 --stack-name "$STACK_NAME" \
                 --region "$REGION" \
-                --query 'StackEvents[?ResourceStatus==`CREATE_FAILED`].[LogicalResourceId,ResourceStatusReason]' \
+                --query 'StackEvents[?contains(ResourceStatus, `FAILED`)].[LogicalResourceId,ResourceStatusReason]' \
                 --output table 2>/dev/null || true
             echo ""
             exit 1
@@ -238,7 +260,7 @@ while true; do
             exit 1
             ;;
         *)
-            # Still in progress (CREATE_IN_PROGRESS, etc.)
+            # Still in progress
             printf "  Status: %s\r" "$STACK_STATUS"
             sleep 10
             ;;
