@@ -227,7 +227,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build and push image with Kaniko
         run: |
-          sudo /kaniko/executor \
+          sudo -E /kaniko/executor \
             --context ${{ github.workspace }} \
             --dockerfile Dockerfile \
             --destination ${{ secrets.ECR_REPO_URI }}:${{ github.sha }} \
@@ -240,14 +240,14 @@ jobs:
 ```yaml
 - name: Build image (no push)
   run: |
-    sudo /kaniko/executor \
+    sudo -E /kaniko/executor \
       --context ${{ github.workspace }} \
       --dockerfile Dockerfile \
       --no-push \
       --force
 ```
 
-Kaniko authenticates to ECR automatically via the ECR credential helper (pre-configured in the image). The task role already has ECR push permissions.
+Kaniko authenticates to ECR via a Docker config JSON you generate in your workflow (see [Kaniko Gotchas](#kaniko-gotchas-and-workflow-tips) below for details).
 
 > **Note:** `docker build` and `docker run` commands will NOT work on these runners since there's no Docker daemon. Use Kaniko for image builds.
 
@@ -500,6 +500,68 @@ python -m pytest tests/unit/test_webhook_handler.py -v
 
 # Run property tests with verbose Hypothesis output
 python -m pytest tests/property/ -v --hypothesis-show-statistics
+```
+
+## Kaniko Gotchas and Workflow Tips
+
+Kaniko runs inside the runner container (not in its own isolated container), which introduces some quirks. Here's what to watch out for:
+
+### ECR Authentication for Kaniko
+
+Kaniko doesn't use `docker login`. You need to generate a Docker config JSON manually in your workflow:
+
+```yaml
+- name: Configure ECR auth for Kaniko
+  run: |
+    TOKEN=$(aws ecr get-login-password --region ${AWS_REGION})
+    AUTH=$(echo -n "AWS:${TOKEN}" | base64 -w 0)
+    sudo mkdir -p /kaniko/.docker
+    echo "{\"auths\":{\"${ECR_REGISTRY}\":{\"auth\":\"${AUTH}\"}}}" | sudo tee /kaniko/.docker/config.json
+```
+
+### Running Kaniko
+
+- Use `sudo -E` to preserve environment variables (ECS metadata endpoint for IAM credentials)
+- Don't use `--docker-cfg` — it doesn't exist in this version. Kaniko reads `/kaniko/.docker/config.json` by default
+- Always use `--force` since Kaniko is running inside another container
+
+```yaml
+- name: Build and push
+  run: |
+    sudo -E /kaniko/executor \
+      --context ${{ github.workspace }} \
+      --dockerfile Dockerfile \
+      --destination ${ECR_REPO}:latest \
+      --force
+```
+
+### Host Filesystem Leakage
+
+Kaniko's biggest gotcha when running inside a container is that it snapshots the host's filesystem as the base layer. Host-specific files (dpkg overrides, config files, system groups) leak into the build and conflict with the target image's packages.
+
+Fix this at the start of your Dockerfile's `RUN` commands:
+
+```dockerfile
+RUN rm -f /var/lib/dpkg/statoverride && \
+    rm -f /etc/X11/Xsession.d/90gpg-agent && \
+    apt-get update && apt-get install -y ...
+```
+
+### Missing Packages on Self-Hosted Runners
+
+Unlike GitHub-hosted runners, self-hosted runners don't come with many pre-installed tools. Common additions needed in your workflow:
+
+```yaml
+- name: Install dependencies
+  run: sudo apt-get update && sudo apt-get install -y python3-venv
+```
+
+### Non-Interactive Builds
+
+Always set `DEBIAN_FRONTEND=noninteractive` in Dockerfiles built with Kaniko — there's no TTY, so interactive prompts (like dpkg conffile questions) will hang forever:
+
+```dockerfile
+ENV DEBIAN_FRONTEND=noninteractive
 ```
 
 ## Security Considerations
