@@ -286,6 +286,8 @@ The custom role must have a trust policy allowing `ecs-tasks.amazonaws.com` to a
 }
 ```
 
+> **Important:** Your custom task role **must** include `secretsmanager:GetSecretValue` for the PAT secret. The entrypoint calls `aws secretsmanager get-secret-value` at runtime to obtain the registration token. Without this permission, the runner will fail immediately on startup.
+
 Example policy for workflows that build and push Docker images to ECR:
 
 ```json
@@ -323,8 +325,6 @@ Example policy for workflows that build and push Docker images to ECR:
   ]
 }
 ```
-
-> **Important:** Your custom role must include `secretsmanager:GetSecretValue` for the PAT secret — the entrypoint needs this to register the runner.
 
 ## Configuration Reference
 
