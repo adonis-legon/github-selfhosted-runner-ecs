@@ -170,7 +170,7 @@ def validate_task_definition(template, resource_name, expected_arch):
     # Check environment variables
     env_vars = container.get("Environment", [])
     env_names = [e.get("Name") for e in env_vars]
-    required_env = ["GITHUB_ORG", "RUNNER_LABELS", "PAT_SSM_PARAM", "AWS_REGION"]
+    required_env = ["GITHUB_ORG", "RUNNER_LABELS", "PAT_SECRET_ARN", "AWS_REGION"]
     for var in required_env:
         if var not in env_names:
             errors.append(f"{resource_name} container missing environment variable: {var}")

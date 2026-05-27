@@ -37,7 +37,7 @@ ENV_VARS = {
     "TASK_DEF_ARM64_ARN": "arn:aws:ecs:us-east-1:123456789012:task-definition/github-runner-arm64:3",
     "SUBNETS": "subnet-pub-a,subnet-pub-b",
     "SECURITY_GROUP": "sg-runners-001",
-    "WEBHOOK_SECRET_PARAM": "/github-runner/webhook-secret",
+    "WEBHOOK_SECRET_ARN": "arn:aws:secretsmanager:us-east-1:123456789012:secret:/github-runner/webhook-secret-AbCdEf",
 }
 
 
@@ -99,11 +99,11 @@ def env_vars(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def mock_ssm():
-    """Mock SSM to return the webhook secret."""
-    with patch.object(_webhook_handler, "ssm_client") as mock:
-        mock.get_parameter.return_value = {
-            "Parameter": {"Value": WEBHOOK_SECRET}
+def mock_secretsmanager():
+    """Mock Secrets Manager to return the webhook secret."""
+    with patch.object(_webhook_handler, "secretsmanager_client") as mock:
+        mock.get_secret_value.return_value = {
+            "SecretString": WEBHOOK_SECRET
         }
         yield mock
 
@@ -168,16 +168,14 @@ class TestEndToEndWebhookFlow:
         assert net_config["securityGroups"] == ["sg-runners-001"]
         assert net_config["assignPublicIp"] == "ENABLED"
 
-    def test_ssm_called_to_retrieve_webhook_secret(self, mock_ssm, mock_ecs):
-        """The handler retrieves the webhook secret from SSM before validation."""
+    def test_secretsmanager_called_to_retrieve_webhook_secret(self, mock_secretsmanager, mock_ecs):
+        """The handler retrieves the webhook secret from Secrets Manager before validation."""
         payload = _queued_payload()
         event = _build_webhook_event(payload)
 
         handler(event, None)
 
-        mock_ssm.get_parameter.assert_called_once_with(
-            Name="/github-runner/webhook-secret", WithDecryption=True
-        )
+        mock_secretsmanager.get_secret_value.assert_called_once()
 
     def test_handler_processes_full_github_payload(self, mock_ecs):
         """Handler works with a realistic full GitHub webhook payload."""
@@ -526,10 +524,10 @@ class TestHandlerResponseCodes:
         body = json.loads(result["body"])
         assert "details" in body
 
-    def test_500_on_ssm_secret_retrieval_failure(self, mock_ssm):
-        """Returns 500 when SSM fails to retrieve the webhook secret."""
-        mock_ssm.get_parameter.side_effect = Exception(
-            "ParameterNotFound: /github-runner/webhook-secret"
+    def test_500_on_secretsmanager_retrieval_failure(self, mock_secretsmanager):
+        """Returns 500 when Secrets Manager fails to retrieve the webhook secret."""
+        mock_secretsmanager.get_secret_value.side_effect = Exception(
+            "ResourceNotFoundException: /github-runner/webhook-secret"
         )
         payload = _queued_payload()
         event = _build_webhook_event(payload)

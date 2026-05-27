@@ -317,14 +317,14 @@ Example policy for workflows that build and push Docker images to ECR:
     },
     {
       "Effect": "Allow",
-      "Action": ["ssm:GetParameter"],
-      "Resource": "arn:aws:ssm:*:123456789012:parameter/github-runner/pat"
+      "Action": ["secretsmanager:GetSecretValue"],
+      "Resource": "arn:aws:secretsmanager:*:123456789012:secret:/github-runner/pat*"
     }
   ]
 }
 ```
 
-> **Important:** Your custom role must include `ssm:GetParameter` for `/github-runner/pat` — the entrypoint needs this to register the runner.
+> **Important:** Your custom role must include `secretsmanager:GetSecretValue` for the PAT secret — the entrypoint needs this to register the runner.
 
 ## Configuration Reference
 
@@ -345,13 +345,13 @@ Example policy for workflows that build and push Docker images to ECR:
 
 These are set automatically by the task definition:
 
-| Variable        | Description                                            |
-| --------------- | ------------------------------------------------------ |
-| `GITHUB_ORG`    | Organization or username for runner registration       |
-| `GITHUB_REPO`   | (Optional) Repository name for repo-level registration |
-| `PAT_SSM_PARAM` | SSM parameter path for the PAT                         |
-| `RUNNER_LABELS` | Labels assigned to the runner                          |
-| `AWS_REGION`    | Region for AWS API calls                               |
+| Variable         | Description                                            |
+| ---------------- | ------------------------------------------------------ |
+| `GITHUB_ORG`     | Organization or username for runner registration       |
+| `GITHUB_REPO`    | (Optional) Repository name for repo-level registration |
+| `PAT_SECRET_ARN` | Secrets Manager ARN for the PAT                        |
+| `RUNNER_LABELS`  | Labels assigned to the runner                          |
+| `AWS_REGION`     | Region for AWS API calls                               |
 
 ## Operations
 
@@ -367,14 +367,12 @@ New tasks will automatically pull the `latest` tag. Running tasks are unaffected
 
 ### Rotating the PAT
 
-Update the SSM parameter directly:
+Update the secret in Secrets Manager:
 
 ```bash
-aws ssm put-parameter \
-  --name /github-runner/pat \
-  --value "ghp_NEW_TOKEN_HERE" \
-  --type String \
-  --overwrite \
+aws secretsmanager put-secret-value \
+  --secret-id /github-runner/pat \
+  --secret-string "ghp_NEW_TOKEN_HERE" \
   --region us-east-1
 ```
 
@@ -568,7 +566,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 - **No inbound traffic**: Security group allows egress only — runners cannot be reached from the internet
 - **Ephemeral by design**: Each job gets a fresh container with no state from previous runs
-- **Secrets in SSM**: PAT and webhook secret are stored in SSM Parameter Store, never in code or environment variables at rest
+- **Secrets in Secrets Manager**: PAT and webhook secret are stored in AWS Secrets Manager with KMS encryption, never in code or environment variables at rest
 - **Webhook validation**: Every incoming request is verified via HMAC-SHA256 before processing
 - **Non-root execution**: The runner agent runs as a non-root user inside the container
 - **Minimal IAM**: Task role only has `ssm:GetParameter` for the PAT; execution role only has ECR pull and CloudWatch Logs

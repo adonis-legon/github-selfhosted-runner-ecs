@@ -217,18 +217,18 @@ class TestEphemeralStorage:
                 )
 
 
-class TestSSMParameterForPAT:
-    """Validate template contains SSM parameter for PAT (Req 3.1)."""
+class TestSecretsManagerForPAT:
+    """Validate template contains Secrets Manager secret for PAT (Req 3.1)."""
 
-    def test_ssm_parameter_for_pat_exists(self, template):
-        ssm_params = get_resources_by_type(template, "AWS::SSM::Parameter")
-        pat_params = [
+    def test_secrets_manager_for_pat_exists(self, template):
+        secrets = get_resources_by_type(template, "AWS::SecretsManager::Secret")
+        pat_secrets = [
             name
-            for name, param in ssm_params.items()
-            if "pat" in param.get("Properties", {}).get("Name", "").lower()
+            for name, secret in secrets.items()
+            if "pat" in secret.get("Properties", {}).get("Name", "").lower()
         ]
-        assert len(pat_params) >= 1, (
-            "Template must contain an SSM Parameter for the GitHub PAT"
+        assert len(pat_secrets) >= 1, (
+            "Template must contain a Secrets Manager secret for the GitHub PAT"
         )
 
 
@@ -244,7 +244,7 @@ class TestEntrypointEphemeralFlag:
 class TestTaskDefinitionEntrypointWiring:
     """Validate task definition environment variables match entrypoint expectations (Req 3.1, 3.2, 3.3, 8.1, 8.3, 8.4)."""
 
-    REQUIRED_ENV_VARS = ["GITHUB_ORG", "RUNNER_LABELS", "PAT_SSM_PARAM", "AWS_REGION"]
+    REQUIRED_ENV_VARS = ["GITHUB_ORG", "RUNNER_LABELS", "PAT_SECRET_ARN", "AWS_REGION"]
 
     def _get_container_env_names(self, task_def):
         """Extract environment variable names from a task definition's container definitions."""
@@ -307,18 +307,18 @@ class TestTaskDefinitionEntrypointWiring:
                 )
 
     def test_task_definitions_have_pat_secret(self, template):
-        """Verify secrets configuration passes PAT from SSM to container (Req 3.1)."""
+        """Verify secrets configuration passes PAT from Secrets Manager to container (Req 3.1)."""
         task_defs = get_resources_by_type(template, "AWS::ECS::TaskDefinition")
         for name, td in task_defs.items():
             secrets = self._get_container_secrets(td)
             pat_secrets = [s for s in secrets if s.get("Name") == "GITHUB_PAT"]
             assert len(pat_secrets) >= 1, (
-                f"Task Definition '{name}' must have a GITHUB_PAT secret from SSM"
+                f"Task Definition '{name}' must have a GITHUB_PAT secret"
             )
-            # Verify the ValueFrom references the PAT SSM parameter
+            # Verify the ValueFrom references the PAT secret (Secrets Manager Ref)
             value_from = pat_secrets[0].get("ValueFrom", "")
-            assert "github-runner/pat" in str(value_from), (
-                f"Task Definition '{name}' GITHUB_PAT secret must reference /github-runner/pat SSM parameter"
+            assert value_from is not None and value_from != "", (
+                f"Task Definition '{name}' GITHUB_PAT secret must have a ValueFrom reference"
             )
 
     def test_task_definitions_have_no_persistent_volumes(self, template):

@@ -36,7 +36,7 @@ ENV_VARS = {
     "TASK_DEF_ARM64_ARN": "arn:aws:ecs:us-east-1:123456789012:task-definition/runner-arm64:1",
     "SUBNETS": "subnet-aaa,subnet-bbb",
     "SECURITY_GROUP": "sg-12345",
-    "WEBHOOK_SECRET_PARAM": "/github-runner/webhook-secret",
+    "WEBHOOK_SECRET_ARN": "arn:aws:secretsmanager:us-east-1:123456789012:secret:/github-runner/webhook-secret-AbCdEf",
 }
 
 
@@ -83,11 +83,11 @@ def mock_env(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def mock_ssm():
-    """Mock SSM client to return the webhook secret."""
-    with patch.object(_webhook_handler, "ssm_client") as mock:
-        mock.get_parameter.return_value = {
-            "Parameter": {"Value": WEBHOOK_SECRET}
+def mock_secretsmanager():
+    """Mock Secrets Manager client to return the webhook secret."""
+    with patch.object(_webhook_handler, "secretsmanager_client") as mock:
+        mock.get_secret_value.return_value = {
+            "SecretString": WEBHOOK_SECRET
         }
         yield mock
 
@@ -198,9 +198,9 @@ class TestECSFailure:
         assert "details" in body
         assert "ResourceNotFoundException" in body["details"]
 
-    def test_ssm_failure_returns_500(self, mock_ssm):
-        """When SSM fails to retrieve the secret, handler returns 500."""
-        mock_ssm.get_parameter.side_effect = Exception("Access denied")
+    def test_secretsmanager_failure_returns_500(self, mock_secretsmanager):
+        """When Secrets Manager fails to retrieve the secret, handler returns 500."""
+        mock_secretsmanager.get_secret_value.side_effect = Exception("Access denied")
         event = _make_event(_valid_payload())
         result = handler(event, None)
 

@@ -5,7 +5,7 @@
 # Environment Variables:
 #   GITHUB_ORG       - GitHub organization name
 #   GITHUB_REPO      - (Optional) Specific repository
-#   PAT_SSM_PARAM    - SSM parameter name for PAT
+#   PAT_SECRET_ARN   - Secrets Manager ARN for PAT
 #   RUNNER_LABELS    - Comma-separated runner labels
 #   AWS_REGION       - AWS region for API calls
 #
@@ -39,15 +39,14 @@ cleanup() {
 
 trap cleanup EXIT
 
-# --- Step 1: Retrieve PAT from SSM Parameter Store (Req 3.1, 3.6) ---
-log "Retrieving PAT from SSM Parameter Store: ${PAT_SSM_PARAM}"
-PAT=$(aws ssm get-parameter \
-  --name "${PAT_SSM_PARAM}" \
-  --with-decryption \
-  --query "Parameter.Value" \
+# --- Step 1: Retrieve PAT from Secrets Manager (Req 3.1, 3.6) ---
+log "Retrieving PAT from Secrets Manager: ${PAT_SECRET_ARN}"
+PAT=$(aws secretsmanager get-secret-value \
+  --secret-id "${PAT_SECRET_ARN}" \
+  --query "SecretString" \
   --output text \
   --region "${AWS_REGION}" 2>&1) || {
-  log_error "Failed to retrieve PAT from SSM parameter '${PAT_SSM_PARAM}'. Ensure the task role has ssm:GetParameter permission."
+  log_error "Failed to retrieve PAT from Secrets Manager '${PAT_SECRET_ARN}'. Ensure the task role has secretsmanager:GetSecretValue permission."
   log_error "Details: ${PAT}"
   exit 1
 }

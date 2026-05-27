@@ -173,15 +173,15 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ecs/github-runner*"
-        - PolicyName: SSMGetParameterPolicy
+        - PolicyName: SecretsManagerPolicy
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
                 Action:
-                  - ssm:GetParameter
-                  - ssm:GetParameters
-                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/github-runner/*"
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref PATSecret
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-task-execution-role"
@@ -198,14 +198,14 @@ Resources:
               Service: ecs-tasks.amazonaws.com
             Action: sts:AssumeRole
       Policies:
-        - PolicyName: SSMGetParameterPolicy
+        - PolicyName: SecretsManagerPolicy
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
                 Action:
-                  - ssm:GetParameter
-                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/github-runner/pat"
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref PATSecret
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-task-role"
@@ -264,13 +264,13 @@ Resources:
               Value: !Ref GitHubRepo
             - Name: RUNNER_LABELS
               Value: "self-hosted,linux,x64"
-            - Name: PAT_SSM_PARAM
-              Value: "/github-runner/pat"
+            - Name: PAT_SECRET_ARN
+              Value: !Ref PATSecret
             - Name: AWS_REGION
               Value: !Ref "AWS::Region"
           Secrets:
             - Name: GITHUB_PAT
-              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/github-runner/pat"
+              ValueFrom: !Ref PATSecret
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -309,13 +309,13 @@ Resources:
               Value: !Ref GitHubRepo
             - Name: RUNNER_LABELS
               Value: "self-hosted,linux,arm64"
-            - Name: PAT_SSM_PARAM
-              Value: "/github-runner/pat"
+            - Name: PAT_SECRET_ARN
+              Value: !Ref PATSecret
             - Name: AWS_REGION
               Value: !Ref "AWS::Region"
           Secrets:
             - Name: GITHUB_PAT
-              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/github-runner/pat"
+              ValueFrom: !Ref PATSecret
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -359,25 +359,25 @@ Resources:
         - Key: Name
           Value: !Sub "${AWS::StackName}-ecr-repo"
 
-  PATParameter:
-    Type: AWS::SSM::Parameter
+  PATSecret:
+    Type: AWS::SecretsManager::Secret
     Properties:
-      Type: String
       Name: /github-runner/pat
-      Value: !Ref PATValue
       Description: GitHub PAT for runner registration
+      SecretString: !Ref PATValue
       Tags:
-        Name: !Sub "${AWS::StackName}-pat-param"
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-pat-secret"
 
-  WebhookSecretParameter:
-    Type: AWS::SSM::Parameter
+  WebhookSecretSecret:
+    Type: AWS::SecretsManager::Secret
     Properties:
-      Type: String
       Name: /github-runner/webhook-secret
-      Value: !Ref WebhookSecret
       Description: GitHub webhook shared secret
+      SecretString: !Ref WebhookSecret
       Tags:
-        Name: !Sub "${AWS::StackName}-webhook-secret-param"
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-webhook-secret"
 
   # ============================================================
   # Lambda and API Gateway Resources
@@ -422,14 +422,14 @@ Resources:
                 Condition:
                   StringEquals:
                     iam:PassedToService: ecs-tasks.amazonaws.com
-        - PolicyName: SSMGetParameterPolicy
+        - PolicyName: SecretsManagerPolicy
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
                 Action:
-                  - ssm:GetParameter
-                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/github-runner/webhook-secret"
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref WebhookSecretSecret
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-lambda-execution-role"
@@ -451,7 +451,7 @@ Resources:
           TASK_DEF_ARM64_ARN: !Ref TaskDefinitionArm64
           SUBNETS: !Sub "${PublicSubnetA},${PublicSubnetB}"
           SECURITY_GROUP: !Ref RunnerSecurityGroup
-          WEBHOOK_SECRET_PARAM: /github-runner/webhook-secret
+          WEBHOOK_SECRET_ARN: !Ref WebhookSecretSecret
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-webhook-handler"

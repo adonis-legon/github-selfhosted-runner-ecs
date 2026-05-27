@@ -18,7 +18,7 @@ import boto3
 logger = logging.getLogger(__name__)
 
 ecs_client = boto3.client("ecs")
-ssm_client = boto3.client("ssm")
+secretsmanager_client = boto3.client("secretsmanager")
 
 
 def validate_signature(payload: bytes, signature: str, secret: str) -> bool:
@@ -230,18 +230,18 @@ def handler(event, context):
     task_def_arm64_arn = os.environ.get("TASK_DEF_ARM64_ARN", "")
     subnets_str = os.environ.get("SUBNETS", "")
     security_group = os.environ.get("SECURITY_GROUP", "")
-    webhook_secret_param = os.environ.get("WEBHOOK_SECRET_PARAM", "")
+    webhook_secret_arn = os.environ.get("WEBHOOK_SECRET_ARN", "")
 
     subnets = [s.strip() for s in subnets_str.split(",") if s.strip()]
 
-    # Step 1: Retrieve webhook secret from SSM Parameter Store
+    # Step 1: Retrieve webhook secret from Secrets Manager
     try:
-        ssm_response = ssm_client.get_parameter(
-            Name=webhook_secret_param, WithDecryption=True
+        sm_response = secretsmanager_client.get_secret_value(
+            SecretId=webhook_secret_arn
         )
-        webhook_secret = ssm_response["Parameter"]["Value"]
+        webhook_secret = sm_response["SecretString"]
     except Exception as e:
-        logger.error("Failed to retrieve webhook secret from SSM: %s", str(e))
+        logger.error("Failed to retrieve webhook secret from Secrets Manager: %s", str(e))
         return {
             "statusCode": 500,
             "body": json.dumps({"error": "Internal server error"}),

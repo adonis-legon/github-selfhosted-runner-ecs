@@ -21,7 +21,7 @@ ENTRYPOINT = str(Path(__file__).resolve().parents[2] / "docker" / "entrypoint.sh
 # Base environment variables required by the entrypoint
 BASE_ENV = {
     "GITHUB_ORG": "test-org",
-    "PAT_SSM_PARAM": "/github-runner/pat",
+    "PAT_SECRET_ARN": "arn:aws:secretsmanager:us-east-1:123456789012:secret:/github-runner/pat-AbCdEf",
     "RUNNER_LABELS": "self-hosted,linux,x64",
     "AWS_REGION": "us-east-1",
     "HOME": "/tmp",
@@ -214,15 +214,15 @@ class TestInvalidPAT:
 # --- Test: SSM access denied logs error and exits 1 (Req 3.6) ---
 
 
-class TestSSMAccessDenied:
-    """SSM access denied logs error and exits 1 (Req 3.6)."""
+class TestSecretsManagerAccessDenied:
+    """Secrets Manager access denied logs error and exits 1 (Req 3.6)."""
 
-    def test_ssm_access_denied_exits_1(self, tmp_path):
-        """When aws ssm get-parameter fails with access denied, entrypoint exits 1."""
+    def test_secrets_access_denied_exits_1(self, tmp_path):
+        """When aws secretsmanager get-secret-value fails with access denied, entrypoint exits 1."""
         bin_dir = _setup_mock_bin(
             tmp_path,
             aws_script=textwrap.dedent("""\
-                echo "An error occurred (AccessDeniedException) when calling the GetParameter operation: User is not authorized" >&2
+                echo "An error occurred (AccessDeniedException) when calling the GetSecretValue operation: User is not authorized" >&2
                 exit 1
             """),
         )
@@ -231,12 +231,12 @@ class TestSSMAccessDenied:
 
         assert result.returncode == 1
 
-    def test_ssm_access_denied_logs_error(self, tmp_path):
-        """Error output mentions SSM parameter retrieval failure."""
+    def test_secrets_access_denied_logs_error(self, tmp_path):
+        """Error output mentions Secrets Manager retrieval failure."""
         bin_dir = _setup_mock_bin(
             tmp_path,
             aws_script=textwrap.dedent("""\
-                echo "An error occurred (AccessDeniedException) when calling the GetParameter operation: User is not authorized" >&2
+                echo "An error occurred (AccessDeniedException) when calling the GetSecretValue operation: User is not authorized" >&2
                 exit 1
             """),
         )
@@ -245,15 +245,14 @@ class TestSSMAccessDenied:
 
         combined_output = result.stdout + result.stderr
         assert "ERROR" in combined_output
-        # Should mention SSM or parameter retrieval
-        assert "SSM" in combined_output or "PAT" in combined_output or "parameter" in combined_output.lower()
+        assert "PAT" in combined_output or "Secrets Manager" in combined_output or "secret" in combined_output.lower()
 
-    def test_ssm_missing_parameter_exits_1(self, tmp_path):
-        """When SSM parameter does not exist, entrypoint exits 1."""
+    def test_secrets_missing_secret_exits_1(self, tmp_path):
+        """When secret does not exist, entrypoint exits 1."""
         bin_dir = _setup_mock_bin(
             tmp_path,
             aws_script=textwrap.dedent("""\
-                echo "An error occurred (ParameterNotFound) when calling the GetParameter operation: Parameter /github-runner/pat not found" >&2
+                echo "An error occurred (ResourceNotFoundException) when calling the GetSecretValue operation: Secret not found" >&2
                 exit 1
             """),
         )
